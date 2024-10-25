@@ -61,23 +61,23 @@ const ArgWithData = struct {
 
     subcommands: ?std.ArrayList(ArgWithData) = null,
     flags: ?std.ArrayList(ArgWithData) = null,
-    params: ?std.ArrayList(ArgWithData) = null,
+    param: ?*const ArgWithData = null,
 
     fn init(self: *@This(), allocator: std.mem.Allocator) void {
         self.flags = std.ArrayList(ArgWithData).init(allocator);
 
         self.subcommands = std.ArrayList(ArgWithData).init(allocator);
-
-        self.params = std.ArrayList(ArgWithData).init(allocator);
     }
 };
 
+//TODO: check if next argument after flag is actually a parameter,
+// and not a subcommand or another flag
 fn parseArgs(
     comptime rootCommand: args.Command,
     argv: [][*:0]u8,
     argData: ?*ArgWithData,
     allocator: std.mem.Allocator,
-) void {
+) usize {
     var i: usize = 0;
 
     while (true) {
@@ -92,57 +92,103 @@ fn parseArgs(
                         .data = .{ .bool = true },
                     }) catch @panic("get more ram");
                 } else {
-                    if (flag.params) |params| {
+                    if (flag.param) |param| {
                         argData.?.flags.?.append(.{
                             .name = flag.name,
                         }) catch @panic("get more ram");
                         var f = &argData.?.flags.?.items[argData.?.flags.?.items.len - 1];
                         f.init(allocator);
 
-                        for (params) |param| {
-                            if (i >= argv.len or rootCommand.ifFlag(std.mem.span(argv[i]))) {
-                                if (param.required) {
-                                    std.log.err("«{s}»: missing «{s}» as a parameter", .{ flag.name, param.name });
-                                    std.process.exit(1);
-                                } else {
-                                    continue;
-                                }
+                        if (i >= argv.len or rootCommand.ifFlag(std.mem.span(argv[i]))) {
+                            if (param.required) {
+                                std.log.err("«{s}»: missing «{s}» as a parameter", .{ flag.name, param.name });
+                                std.process.exit(1);
+                            } else {
+                                continue;
                             }
-                            f.params.?.append(.{
-                                .name = param.name,
-                                .data = switch (param.type) {
-                                    .int => DataType{ .int = std.fmt.parseInt(i32, std.mem.span(argv[i]), 0) catch {
-                                        std.log.err("«{s}» is not of type: «int»", .{param.name});
-                                        std.process.exit(1);
-                                    } },
-
-                                    .uint => DataType{ .uint = std.fmt.parseInt(u32, std.mem.span(argv[i]), 0) catch {
-                                        std.log.err("«{s}» is not of type: «uint»", .{param.name});
-                                        std.process.exit(1);
-                                    } },
-
-                                    .string => DataType{ .string = std.mem.span(argv[i]) },
-
-                                    .bool => if (std.mem.eql(u8, std.mem.span(argv[i]), "true"))
-                                        DataType{ .bool = true }
-                                    else if (std.mem.eql(u8, std.mem.span(argv[i]), "false"))
-                                        DataType{ .bool = false }
-                                    else {
-                                        std.log.err("«{s}» is not of type: «bool»", .{param.name});
-                                        std.process.exit(1);
-                                    },
-                                },
-                            }) catch @panic("get more ram");
-
-                            i += 1;
                         }
+                        i += 1;
+                        f.param = &.{
+                            .name = param.name,
+                            .data = switch (param.type) {
+                                .int => DataType{ .int = std.fmt.parseInt(i32, std.mem.span(argv[i]), 0) catch {
+                                    std.log.err("«{s}» is not of type: «int»", .{param.name});
+                                    std.process.exit(1);
+                                } },
+
+                                .uint => DataType{ .uint = std.fmt.parseInt(u32, std.mem.span(argv[i]), 0) catch {
+                                    std.log.err("«{s}» is not of type: «uint»", .{param.name});
+                                    std.process.exit(1);
+                                } },
+
+                                .string => DataType{ .string = std.mem.span(argv[i]) },
+
+                                .bool => if (std.mem.eql(u8, std.mem.span(argv[i]), "true"))
+                                    DataType{ .bool = true }
+                                else if (std.mem.eql(u8, std.mem.span(argv[i]), "false"))
+                                    DataType{ .bool = false }
+                                else {
+                                    std.log.err("«{s}» is not of type: «bool»", .{param.name});
+                                    std.process.exit(1);
+                                },
+                            },
+                        };
+
+                        i += 1;
                     }
                 }
             }
         };
-        // if (rootCommand.subcommands) |scs| for (scs) |sc| {};
-        // if (rootCommand.params) |params| for (params) |param| {};
+        if (rootCommand.subcommands) |scs| inline for (scs) |sc| {
+            if (std.mem.eql(u8, sc.name, std.mem.span(argv[i]))) {
+                // i += 1;
+                i += parseArgs(sc, argv[i..], argData, allocator);
+            }
+        };
+        if (rootCommand.param) |param| {
+            argData.?.param = &.{
+                .name = rootCommand.name,
+            };
+
+            if (i >= argv.len or rootCommand.ifFlag(std.mem.span(argv[i]))) {
+                if (param.required) {
+                    std.log.err("«{s}»: missing «{s}» as a parameter", .{ rootCommand.name, param.name });
+                    std.process.exit(1);
+                } else {
+                    continue;
+                }
+            }
+            i += 1;
+            argData.?.param = &.{
+                .name = param.name,
+                .data = switch (param.type) {
+                    .int => DataType{ .int = std.fmt.parseInt(i32, std.mem.span(argv[i]), 0) catch {
+                        std.log.err("«{s}» is not of type: «int»", .{param.name});
+                        std.process.exit(1);
+                    } },
+
+                    .uint => DataType{ .uint = std.fmt.parseInt(u32, std.mem.span(argv[i]), 0) catch {
+                        std.log.err("«{s}» is not of type: «uint»", .{param.name});
+                        std.process.exit(1);
+                    } },
+
+                    .string => DataType{ .string = std.mem.span(argv[i]) },
+
+                    .bool => if (std.mem.eql(u8, std.mem.span(argv[i]), "true"))
+                        DataType{ .bool = true }
+                    else if (std.mem.eql(u8, std.mem.span(argv[i]), "false"))
+                        DataType{ .bool = false }
+                    else {
+                        std.log.err("«{s}» is not of type: «bool»", .{param.name});
+                        std.process.exit(1);
+                    },
+                },
+            };
+
+            i += 1;
+        }
     }
+    return i;
 }
 
 pub fn collectArgs(comptime rootCommand: args.Command, allocator: std.mem.Allocator) !ArgWithData {
@@ -157,6 +203,6 @@ pub fn collectArgs(comptime rootCommand: args.Command, allocator: std.mem.Alloca
         .name = rootCommand.name,
     };
     appData.init(allocator);
-    parseArgs(rootCommand, argv[1..], &appData, allocator);
+    _ = parseArgs(rootCommand, argv[1..], &appData, allocator);
     return appData;
 }

@@ -25,13 +25,17 @@ pub const Command = struct {
     desc: ?[]const u8,
 
     // can user defined flags make an appearance (runtime interpreted values)
-    arbitraryFlags: bool = false,
-    arbitraryFlagType: ?ParamType = null,
-    arbitraryFlagLimit: usize = 0,
+    variadicFlags: bool = false,
+    variadicFlagType: ?ParamType = null,
+    variadicFlagLimit: usize = 0,
+
+    variadicParams: bool = false,
+    variadicParamType: ?ParamType = null,
+    variadicParamLimit: usize = 0,
 
     flags: ?[]const Flag = null,
     subcommands: ?[]const Command = null,
-    params: ?[]const Param = null,
+    param: ?Param = null,
 
     pub fn getIfFlag(comptime self: @This(), flag: []const u8) ?Flag {
         if (self.flags) |flags| inline for (flags) |f| {
@@ -53,20 +57,18 @@ pub const Command = struct {
         try stdout.print("{s}\n\n", .{if (self.desc) |d| d else ""});
         try stdout.print("Usage: {s}", .{self.name});
         if (self.flags) |l| if (l.len != 0) try stdout.print(" [OPTIONS]", .{});
-        if (self.arbitraryFlags) try stdout.print(" ...", .{});
+        if (self.variadicFlags) try stdout.print(" ...", .{});
         if (self.subcommands) |l| if (l.len != 0) try stdout.print(" [COMMAND]", .{});
-        if (self.params) |l| if (l.len != 0) inline for (l) |v| {
-            switch (v.type) {
-                .int => try stdout.print(" [{s}: int]", .{v.name}),
-                .uint => try stdout.print(" [{s}: uint]", .{v.name}),
-                .string => try stdout.print(" [{s}: str]", .{v.name}),
-                .bool => try stdout.print(" [{s}: bool]", .{v.name}),
-            }
+        if (self.param) |param| switch (param.type) {
+            .int => try stdout.print(" [{s}: int]", .{param.name}),
+            .uint => try stdout.print(" [{s}: uint]", .{param.name}),
+            .string => try stdout.print(" [{s}: str]", .{param.name}),
+            .bool => try stdout.print(" [{s}: bool]", .{param.name}),
         };
 
         try stdout.print("\n", .{});
 
-        if (self.arbitraryFlags) {
+        if (self.variadicFlags) {
             try stdout.print("Any amount of arbitrary flags with values of type: «{s}» may be put in place of «...»\n", .{@tagName(self.arbitraryFlagType)});
         }
 
@@ -76,13 +78,11 @@ pub const Command = struct {
             inline for (c) |v| {
                 if (v.name.len > maxWidth) maxWidth = v.name.len + 2;
                 var len: usize = 0;
-                if (v.params) |p| inline for (p) |a| {
-                    switch (a.type) {
-                        .int => len += a.name.len + 3,
-                        .uint => len += a.name.len + 4,
-                        .string => len += a.name.len + 3,
-                        .bool => len += a.name.len + 4,
-                    }
+                if (v.param) |param| switch (param.type) {
+                    .int => len += param.name.len + 3,
+                    .uint => len += param.name.len + 4,
+                    .string => len += param.name.len + 3,
+                    .bool => len += param.name.len + 4,
                 };
             }
         }
@@ -90,13 +90,11 @@ pub const Command = struct {
             inline for (c) |v| {
                 try stdout.print("  {s}", .{v.name});
                 for (0..maxWidth - v.name.len) |_| try stdout.print(" ", .{});
-                if (v.params) |p| inline for (p) |a| {
-                    switch (a.type) {
-                        .int => try stdout.print("[{s}: int] ", .{a.name}),
-                        .uint => try stdout.print("[{s}: uint] ", .{a.name}),
-                        .string => try stdout.print("[{s}: str] ", .{a.name}),
-                        .bool => try stdout.print("[{s}: bool] ", .{a.name}),
-                    }
+                if (v.param) |param| switch (param.type) {
+                    .int => try stdout.print("[{s}: int] ", .{param.name}),
+                    .uint => try stdout.print("[{s}: uint] ", .{param.name}),
+                    .string => try stdout.print("[{s}: str] ", .{param.name}),
+                    .bool => try stdout.print("[{s}: bool] ", .{param.name}),
                 };
                 try stdout.print("\n", .{});
                 if (v.desc) |d| try stdout.print("    {s}\n", .{d});
@@ -121,13 +119,11 @@ pub const Command = struct {
                 }
                 try stdout.print("--{s}", .{v.name});
                 for (0..maxWidth - len) |_| try stdout.print(" ", .{});
-                if (v.params) |p| inline for (p) |a| {
-                    switch (a.type) {
-                        .int => try stdout.print("[{s}: int] ", .{a.name}),
-                        .uint => try stdout.print("[{s}: uint] ", .{a.name}),
-                        .string => try stdout.print("[{s}: str] ", .{a.name}),
-                        .bool => try stdout.print("[{s}: bool] ", .{a.name}),
-                    }
+                if (v.param) |param| switch (param.type) {
+                    .int => try stdout.print("[{s}: int] ", .{param.name}),
+                    .uint => try stdout.print("[{s}: uint] ", .{param.name}),
+                    .string => try stdout.print("[{s}: str] ", .{param.name}),
+                    .bool => try stdout.print("[{s}: bool] ", .{param.name}),
                 };
 
                 try stdout.print("\n", .{});
@@ -147,9 +143,9 @@ pub const Param = struct {
 
 pub const Flag = struct {
     name: []const u8,
-    abbrev: ?[]const u8,
-    desc: ?[]const u8,
-    params: ?[]const Param,
+    abbrev: ?[]const u8 = null,
+    desc: ?[]const u8 = null,
+    param: ?Param = null,
     // is this flag a toggle, if so, it cannot accept arguments
     // and is simply used as a setting toggle
     isEnableFlag: bool = false,
