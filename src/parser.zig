@@ -1,54 +1,25 @@
 const std = @import("std");
 const args = @import("./args.zig");
 
-// end goal: take the commands defined by the user, and make a struct based on that
-// and parse arguments into that struct
-
-fn getTotalArgsLength(comptime rootCommand: args.Command) usize {
-    const paramsLength = if (rootCommand.params) |p| p.len else 0;
-    var subcommandsLength: usize = 0;
-    if (rootCommand.subcommands) |p| {
+fn getTotalArgsLength(comptime root_command: args.Command) usize {
+    const params_length = if (root_command.params) |p| p.len else 0;
+    var subcommands_length: usize = 0;
+    if (root_command.subcommands) |p| {
         for (p) |v| {
-            subcommandsLength += getTotalArgsLength(v);
+            subcommands_length += getTotalArgsLength(v);
         }
     }
-    var flagsLength: usize = 0;
-    if (rootCommand.flags) |p| {
-        flagsLength += p.len;
+    var flags_length: usize = 0;
+    if (root_command.flags) |p| {
+        flags_length += p.len;
         for (p) |v| {
-            flagsLength += if (v.params) |q| q.len else 0;
+            flags_length += if (v.params) |q| q.len else 0;
         }
     }
-    return paramsLength + subcommandsLength + flagsLength;
+    return params_length + subcommands_length + flags_length;
 }
 
-// when we parse the first options, we should basically enter a seperate scope,
-// so we know what to parse for next. leaving that scope when we know we're done parsing
-// for that scopes params.
-
-// We know that flags always come first, then subcommands, then parameters
-
-// iterate through the list of strings that is argv
-// if flag, collect parameters, if subcommand, we recursively parse the rest,
-// of argv in that context, and we exit once we collect all the parameters
-
-// if the parameter is optional for a parameter, then we need to check
-// if the next argv is a subcommand or flag by comparing with known names
-// or if it starts with «-» or «--» because of the case of arbitrary flags
-
-// rootCommand
-// |- Flag
-// |  |- parameter
-// |- Flag 2
-// |  |- (optional) parameter
-// |- Subcommand
-// |  |- parameter
-// |- Subcommand
-// |  |- parameter
-// |- parameter
-
-const Arg = enum { command, flag, param };
-const DataType = union(args.ParamType) {
+const ArgDataType = union(args.ParamType) {
     bool: bool,
     int: i32,
     uint: u32,
@@ -57,7 +28,7 @@ const DataType = union(args.ParamType) {
 
 const ArgWithData = struct {
     name: []const u8,
-    data: ?DataType = null,
+    data: ?ArgDataType = null,
 
     subcommands: ?std.ArrayList(ArgWithData) = null,
     flags: ?std.ArrayList(ArgWithData) = null,
@@ -70,139 +41,159 @@ const ArgWithData = struct {
     }
 };
 
-//TODO: check if next argument after flag is actually a parameter,
-// and not a subcommand or another flag
+fn parseArgToData(param: args.Param, argument_string: []u8) ArgDataType {
+    return switch (param.type) {
+        .int => ArgDataType{ .int = std.fmt.parseInt(i32, argument_string, 0) catch {
+            std.log.err("«{s}» is not of type: «int»", .{param.name});
+            std.process.exit(1);
+        } },
+
+        .uint => ArgDataType{ .uint = std.fmt.parseInt(u32, argument_string, 0) catch {
+            std.log.err("«{s}» is not of type: «uint»", .{param.name});
+            std.process.exit(1);
+        } },
+
+        .string => ArgDataType{ .string = argument_string },
+
+        .bool => if (std.mem.eql(u8, argument_string, "true"))
+            ArgDataType{ .bool = true }
+        else if (std.mem.eql(u8, argument_string, "false"))
+            ArgDataType{ .bool = false }
+        else {
+            std.log.err("«{s}» is not of type: «bool»", .{param.name});
+            std.process.exit(1);
+        },
+    };
+}
+
+//TODO: this function should probably be split into multiple
 fn parseArgs(
-    comptime rootCommand: args.Command,
-    argv: [][*:0]u8,
-    argData: ?*ArgWithData,
+    comptime root_command: args.Command,
+    argv: [][]u8,
+    arg_data: ?*ArgWithData,
     allocator: std.mem.Allocator,
 ) usize {
-    var i: usize = 0;
+    var argv_idx: usize = 0;
 
     while (true) {
-        if (i >= argv.len) break;
+        if (argv_idx >= argv.len) break;
+        var is_valid_arg = false;
 
-        if (rootCommand.flags) |flags| for (flags) |flag| {
-            if (rootCommand.ifFlag(std.mem.span(argv[i]))) {
-                i += 1;
+        if (root_command.flags) |flags| for (flags) |flag| {
+            if (root_command.ifFlag(argv[argv_idx])) {
+                is_valid_arg = true;
+                argv_idx += 1;
+                // is this flag simply a toggle or not, e.g: --enable
                 if (flag.isEnableFlag) {
-                    argData.?.flags.?.append(.{
+                    arg_data.?.flags.?.append(.{
                         .name = flag.name,
                         .data = .{ .bool = true },
                     }) catch @panic("get more ram");
-                } else {
-                    if (flag.param) |param| {
-                        argData.?.flags.?.append(.{
-                            .name = flag.name,
-                        }) catch @panic("get more ram");
-                        var f = &argData.?.flags.?.items[argData.?.flags.?.items.len - 1];
-                        f.init(allocator);
+                    continue;
+                }
+                if (flag.param) |param| {
+                    arg_data.?.flags.?.append(.{
+                        .name = flag.name,
+                    }) catch @panic("get more ram");
 
-                        if (i >= argv.len or rootCommand.ifFlag(std.mem.span(argv[i]))) {
-                            if (param.required) {
-                                std.log.err("«{s}»: missing «{s}» as a parameter", .{ flag.name, param.name });
-                                std.process.exit(1);
-                            } else {
-                                continue;
-                            }
+                    const flags_list = &arg_data.?.flags.?.items;
+                    var f = flags_list.*[flags_list.len - 1];
+                    f.init(allocator);
+
+                    if (argv_idx >= argv.len or root_command.ifFlag(argv[argv_idx])) {
+                        if (param.required) {
+                            std.log.err("«{s}»: missing «{s}» as a parameter", .{ flag.name, param.name });
+                            std.process.exit(1);
+                        } else {
+                            continue;
                         }
-                        i += 1;
-                        f.param = &.{
-                            .name = param.name,
-                            .data = switch (param.type) {
-                                .int => DataType{ .int = std.fmt.parseInt(i32, std.mem.span(argv[i]), 0) catch {
-                                    std.log.err("«{s}» is not of type: «int»", .{param.name});
-                                    std.process.exit(1);
-                                } },
-
-                                .uint => DataType{ .uint = std.fmt.parseInt(u32, std.mem.span(argv[i]), 0) catch {
-                                    std.log.err("«{s}» is not of type: «uint»", .{param.name});
-                                    std.process.exit(1);
-                                } },
-
-                                .string => DataType{ .string = std.mem.span(argv[i]) },
-
-                                .bool => if (std.mem.eql(u8, std.mem.span(argv[i]), "true"))
-                                    DataType{ .bool = true }
-                                else if (std.mem.eql(u8, std.mem.span(argv[i]), "false"))
-                                    DataType{ .bool = false }
-                                else {
-                                    std.log.err("«{s}» is not of type: «bool»", .{param.name});
-                                    std.process.exit(1);
-                                },
-                            },
-                        };
-
-                        i += 1;
                     }
+
+                    f.param = &.{
+                        .name = param.name,
+                        .data = parseArgToData(param, argv[argv_idx]),
+                    };
+
+                    argv_idx += 1;
                 }
             }
         };
-        if (rootCommand.subcommands) |scs| inline for (scs) |sc| {
-            if (std.mem.eql(u8, sc.name, std.mem.span(argv[i]))) {
-                // i += 1;
-                i += parseArgs(sc, argv[i..], argData, allocator);
+        if (root_command.subcommands) |scs| inline for (scs) |sc| {
+            if (argv_idx >= argv.len) {
+                is_valid_arg = false;
+                break;
             }
+            if (std.mem.eql(u8, sc.name, argv[argv_idx])) {
+                is_valid_arg = true;
+                argv_idx += parseArgs(sc, argv[argv_idx + 1 ..], arg_data, allocator) + 1;
+                // further arguments should not be interpreted as a subcommand
+                break;
+            } else is_valid_arg = false;
         };
-        if (rootCommand.param) |param| {
-            argData.?.param = &.{
-                .name = rootCommand.name,
+        if (!is_valid_arg) {
+            if (argv_idx < argv.len) for (argv[argv_idx..]) |arg| {
+                if (root_command.ifFlag(arg)) @panic("invalid data ");
+                if (root_command.ifSubcommand(arg)) @panic("invalid data ");
+            };
+        }
+
+        if (root_command.param) |param| {
+            arg_data.?.param = &.{
+                .name = root_command.name,
             };
 
-            if (i >= argv.len or rootCommand.ifFlag(std.mem.span(argv[i]))) {
+            if (argv_idx >= argv.len or root_command.ifFlag(argv[argv_idx])) {
                 if (param.required) {
-                    std.log.err("«{s}»: missing «{s}» as a parameter", .{ rootCommand.name, param.name });
+                    std.log.err("«{s}»: missing «{s}» as a parameter", .{ root_command.name, param.name });
                     std.process.exit(1);
                 } else {
                     continue;
                 }
             }
-            i += 1;
-            argData.?.param = &.{
+
+            arg_data.?.param = &.{
                 .name = param.name,
-                .data = switch (param.type) {
-                    .int => DataType{ .int = std.fmt.parseInt(i32, std.mem.span(argv[i]), 0) catch {
-                        std.log.err("«{s}» is not of type: «int»", .{param.name});
-                        std.process.exit(1);
-                    } },
-
-                    .uint => DataType{ .uint = std.fmt.parseInt(u32, std.mem.span(argv[i]), 0) catch {
-                        std.log.err("«{s}» is not of type: «uint»", .{param.name});
-                        std.process.exit(1);
-                    } },
-
-                    .string => DataType{ .string = std.mem.span(argv[i]) },
-
-                    .bool => if (std.mem.eql(u8, std.mem.span(argv[i]), "true"))
-                        DataType{ .bool = true }
-                    else if (std.mem.eql(u8, std.mem.span(argv[i]), "false"))
-                        DataType{ .bool = false }
-                    else {
-                        std.log.err("«{s}» is not of type: «bool»", .{param.name});
-                        std.process.exit(1);
-                    },
-                },
+                .data = parseArgToData(param, argv[argv_idx]),
             };
 
-            i += 1;
+            argv_idx += 1;
+        }
+        if (argv_idx + 1 >= argv.len) return argv_idx;
+        if (!root_command.ifFlag(argv[argv_idx + 1]) and
+            !root_command.ifSubcommand(argv[argv_idx + 1]) and
+            root_command.param != null)
+        {
+            return argv_idx;
         }
     }
-    return i;
+    return argv_idx;
 }
 
-pub fn collectArgs(comptime rootCommand: args.Command, allocator: std.mem.Allocator) !ArgWithData {
-    try rootCommand.printHelp();
-    // const len = comptime getTotalArgsLength(rootCommand);
-    // try std.testing.expect(rootCommand.doesFlagExist("--fuck") == true);
-    // try std.testing.expect(rootCommand.doesFlagExist("--asd") == false);
-    // try std.testing.expect(rootCommand.doesFlagExist("-a") == true);
-
+pub fn getArgv(allocator: std.mem.Allocator) ![][]u8 {
     const argv = std.os.argv;
-    var appData: ArgWithData = .{
-        .name = rootCommand.name,
+    var new_argv = std.ArrayList([]u8).init(allocator);
+    defer new_argv.deinit();
+
+    for (argv) |arg| {
+        const new_arg = arg[0..std.mem.len(arg)];
+        try new_argv.append(new_arg);
+    }
+
+    return allocator.dupe([]u8, new_argv.items[0..]);
+}
+
+pub fn collectArgs(comptime root_command: args.Command, allocator: std.mem.Allocator) !ArgWithData {
+    try root_command.printHelp();
+    const argv = try getArgv(allocator);
+
+    var app_data: ArgWithData = .{
+        .name = root_command.name,
     };
-    appData.init(allocator);
-    _ = parseArgs(rootCommand, argv[1..], &appData, allocator);
-    return appData;
+    app_data.init(allocator);
+    const len = parseArgs(root_command, argv[1..], &app_data, allocator);
+    if (len < argv.len - 1) {
+        std.log.err("Unexpected arguments: «{s}»...", .{argv[len + 1]});
+        std.process.exit(1);
+    }
+    return app_data;
 }

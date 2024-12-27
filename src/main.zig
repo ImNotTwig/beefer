@@ -5,9 +5,9 @@ const args = beefer.args;
 const parser = beefer.parser;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
-    const app = args.Command{
+    const app = comptime args.Command{
         .name = "zs",
         .desc = "Ziss Password Manager",
         .flags = &.{.{
@@ -18,7 +18,7 @@ pub fn main() !void {
                 .name = "whatEven",
                 .desc = "idk",
                 .required = true,
-                .type = .string,
+                .type = .uint,
             },
             .isEnableFlag = false,
         }},
@@ -49,10 +49,7 @@ pub fn main() !void {
             .type = .string,
         },
     };
-    std.debug.print("app: {}\n", .{app.flags.?[0].param.?});
 
     const appData = try parser.collectArgs(app, allocator);
-
-    std.debug.print("argData: {}\n", .{appData.flags.?.items[0].param.?.data.?});
-    try app.subcommands.?[0].printHelp();
+    _ = appData;
 }

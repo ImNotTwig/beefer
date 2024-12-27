@@ -1,37 +1,12 @@
 const std = @import("std");
 
-// we want to end up with a list of commands with their respective arguments
-// if they have any, which means its optional
-// [][]const u8
-// parse out things in "", keywords, numbers, flags, etc
-// check when keywords or flags are supposed to have a value immediately following it, and
-// map those arguments to said keyword or flag.
-// we will need to be able to stop parsing for arguments when we encounter a -- or keyword,
-// because that wouldn't be a valid argument, because like if you wanted to pass an argument,
-// that has the same name as a keyword, then you would put it in ""
-
-// we will define valid keywords using the comptime values of subcommands, we can definitely
-// do this because subcommands cannot be arbitrary
-
-// there can only be one subcommand per scope, so if a value shares the name of a subcommand,
-// after the first instance of the subcommand name showing up,
-// there shouldnt be a problem, but we should probably like tell the user anyways
-
-// we should only assume -1 is a negative number when the subcommand or flag preceeding it,
-// is expecting an int/i32
-
 pub const Command = struct {
     name: []const u8,
     desc: ?[]const u8,
 
     // can user defined flags make an appearance (runtime interpreted values)
-    variadicFlags: bool = false,
-    variadicFlagType: ?ParamType = null,
-    variadicFlagLimit: usize = 0,
-
-    variadicParams: bool = false,
-    variadicParamType: ?ParamType = null,
-    variadicParamLimit: usize = 0,
+    variadic_flags: bool = false,
+    variadic_flag_type: ?ParamType = null,
 
     flags: ?[]const Flag = null,
     subcommands: ?[]const Command = null,
@@ -52,13 +27,26 @@ pub const Command = struct {
         return false;
     }
 
+    pub fn ifSubcommand(comptime self: @This(), subcommand: []const u8) bool {
+        if (self.subcommands) |scs| inline for (scs) |sc| {
+            if (std.mem.eql(u8, sc.name, subcommand)) return true;
+        };
+        return false;
+    }
+
     pub fn printHelp(comptime self: @This()) !void {
         const stdout = std.io.getStdOut().writer();
+        // description of the command
         try stdout.print("{s}\n\n", .{if (self.desc) |d| d else ""});
+        // name of the command
         try stdout.print("Usage: {s}", .{self.name});
+        // if we have flags, then tell the user that options go here
         if (self.flags) |l| if (l.len != 0) try stdout.print(" [OPTIONS]", .{});
-        if (self.variadicFlags) try stdout.print(" ...", .{});
+        // if there are variadic flags, tell the user with ...
+        if (self.variadic_flags) try stdout.print(" ...", .{});
+        // if there are subcommands tell the user that they should go here
         if (self.subcommands) |l| if (l.len != 0) try stdout.print(" [COMMAND]", .{});
+        // if this command has a parameter, tell the user what its type should be
         if (self.param) |param| switch (param.type) {
             .int => try stdout.print(" [{s}: int]", .{param.name}),
             .uint => try stdout.print(" [{s}: uint]", .{param.name}),
@@ -68,15 +56,22 @@ pub const Command = struct {
 
         try stdout.print("\n", .{});
 
-        if (self.variadicFlags) {
-            try stdout.print("Any amount of arbitrary flags with values of type: «{s}» may be put in place of «...»\n", .{@tagName(self.arbitraryFlagType)});
+        if (self.variadic_flags) {
+            try stdout.print(
+                "Any amount of arbitrary flags with values of type: «{s}» may be put in place of «...»\n",
+                .{@tagName(self.variadic_flag_type.?)},
+            );
         }
 
-        var maxWidth: usize = 2;
+        // max_width is for alignment, so that all subcommands or flags are printed
+        // in a proper column
+        var max_width: usize = 2;
+
+        // getting the maximum length of the subcommand names
         if (self.subcommands) |c| {
             try stdout.print("\nCommands:\n", .{});
             inline for (c) |v| {
-                if (v.name.len > maxWidth) maxWidth = v.name.len + 2;
+                if (v.name.len > max_width) max_width = v.name.len + 2;
                 var len: usize = 0;
                 if (v.param) |param| switch (param.type) {
                     .int => len += param.name.len + 3,
@@ -86,10 +81,11 @@ pub const Command = struct {
                 };
             }
         }
+
         if (self.subcommands) |c| {
             inline for (c) |v| {
                 try stdout.print("  {s}", .{v.name});
-                for (0..maxWidth - v.name.len) |_| try stdout.print(" ", .{});
+                for (0..max_width - v.name.len) |_| try stdout.print(" ", .{});
                 if (v.param) |param| switch (param.type) {
                     .int => try stdout.print("[{s}: int] ", .{param.name}),
                     .uint => try stdout.print("[{s}: uint] ", .{param.name}),
@@ -101,14 +97,16 @@ pub const Command = struct {
             }
         }
 
-        maxWidth = 2;
+        max_width = 2;
+        // getting the maximum length of the flag names
         if (self.flags) |c| {
             try stdout.print("\nOptions:\n", .{});
             inline for (c) |v| {
                 const len = v.name.len + (if (v.abbrev) |a| a.len else 0);
-                if (len > maxWidth) maxWidth = len + 2;
+                if (len > max_width) max_width = len + 2;
             }
         }
+
         if (self.flags) |c| {
             inline for (c) |v| {
                 const len = v.name.len + (if (v.abbrev) |a| a.len else 0) - (if (v.abbrev == null) 3 else 0);
@@ -118,7 +116,7 @@ pub const Command = struct {
                     try stdout.print("  ", .{});
                 }
                 try stdout.print("--{s}", .{v.name});
-                for (0..maxWidth - len) |_| try stdout.print(" ", .{});
+                for (0..max_width - len) |_| try stdout.print(" ", .{});
                 if (v.param) |param| switch (param.type) {
                     .int => try stdout.print("[{s}: int] ", .{param.name}),
                     .uint => try stdout.print("[{s}: uint] ", .{param.name}),
@@ -138,6 +136,7 @@ pub const Param = struct {
     name: []const u8,
     desc: ?[]const u8 = null,
     required: bool = true,
+    isVariadic: bool = false,
     type: ParamType,
 };
 
