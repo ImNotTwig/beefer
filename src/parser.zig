@@ -39,6 +39,17 @@ const ArgWithData = struct {
 
         self.subcommands = std.ArrayList(ArgWithData).init(allocator);
     }
+
+    fn deinit(self: *@This()) void {
+        if (self.subcommands) |*scs| for (scs.*) |*sc| {
+            sc.deinit();
+        };
+        if (self.subcommands) |*scs| scs.deinit();
+        if (self.flags) |*flags| for (flags.*) |*flag| {
+            flag.deinit();
+        };
+        if (self.flags) |*flags| flags.deinit();
+    }
 };
 
 fn parseArgToData(param: args.Param, argument_string: []u8) ArgDataType {
@@ -67,6 +78,7 @@ fn parseArgToData(param: args.Param, argument_string: []u8) ArgDataType {
 }
 
 //TODO: this function should probably be split into multiple
+//TODO: cover variadic arguments
 fn parseArgs(
     comptime root_command: args.Command,
     argv: [][]u8,
@@ -77,11 +89,9 @@ fn parseArgs(
 
     while (true) {
         if (argv_idx >= argv.len) break;
-        var is_valid_arg = false;
 
         if (root_command.flags) |flags| for (flags) |flag| {
             if (root_command.ifFlag(argv[argv_idx])) {
-                is_valid_arg = true;
                 argv_idx += 1;
                 // is this flag simply a toggle or not, e.g: --enable
                 if (flag.isEnableFlag) {
@@ -100,13 +110,14 @@ fn parseArgs(
                     var f = flags_list.*[flags_list.len - 1];
                     f.init(allocator);
 
+                    // make sure required parameters are filled out
                     if (argv_idx >= argv.len or root_command.ifFlag(argv[argv_idx])) {
                         if (param.required) {
                             std.log.err("«{s}»: missing «{s}» as a parameter", .{ flag.name, param.name });
                             std.process.exit(1);
-                        } else {
-                            continue;
                         }
+                        if (argv_idx >= argv.len) break;
+                        continue;
                     }
 
                     f.param = &.{
@@ -119,23 +130,12 @@ fn parseArgs(
             }
         };
         if (root_command.subcommands) |scs| inline for (scs) |sc| {
-            if (argv_idx >= argv.len) {
-                is_valid_arg = false;
-                break;
-            }
             if (std.mem.eql(u8, sc.name, argv[argv_idx])) {
-                is_valid_arg = true;
                 argv_idx += parseArgs(sc, argv[argv_idx + 1 ..], arg_data, allocator) + 1;
                 // further arguments should not be interpreted as a subcommand
                 break;
-            } else is_valid_arg = false;
+            }
         };
-        if (!is_valid_arg) {
-            if (argv_idx < argv.len) for (argv[argv_idx..]) |arg| {
-                if (root_command.ifFlag(arg)) @panic("invalid data ");
-                if (root_command.ifSubcommand(arg)) @panic("invalid data ");
-            };
-        }
 
         if (root_command.param) |param| {
             arg_data.?.param = &.{
