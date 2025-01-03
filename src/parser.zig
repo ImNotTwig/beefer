@@ -52,7 +52,7 @@ const ArgWithData = struct {
     }
 };
 
-fn parseArgToData(param: args.Param, argument_string: []u8) ArgDataType {
+fn parseArgToData(param: args.Param, argument_string: []const u8) ArgDataType {
     return switch (param.type) {
         .int => ArgDataType{ .int = std.fmt.parseInt(i32, argument_string, 0) catch {
             std.log.err("«{s}» is not of type: «int»", .{param.name});
@@ -81,7 +81,7 @@ fn parseArgToData(param: args.Param, argument_string: []u8) ArgDataType {
 //TODO: cover variadic arguments
 fn parseArgs(
     comptime root_command: args.Command,
-    argv: [][]u8,
+    argv: [][]const u8,
     arg_data: ?*ArgWithData,
     allocator: std.mem.Allocator,
 ) usize {
@@ -169,9 +169,9 @@ fn parseArgs(
     return argv_idx;
 }
 
-pub fn getArgv(allocator: std.mem.Allocator) ![][]u8 {
+pub fn getArgv(allocator: std.mem.Allocator) ![][]const u8 {
     const argv = std.os.argv;
-    var new_argv = std.ArrayList([]u8).init(allocator);
+    var new_argv = std.ArrayList([]const u8).init(allocator);
     defer new_argv.deinit();
 
     for (argv) |arg| {
@@ -179,12 +179,12 @@ pub fn getArgv(allocator: std.mem.Allocator) ![][]u8 {
         try new_argv.append(new_arg);
     }
 
-    return allocator.dupe([]u8, new_argv.items[0..]);
+    return allocator.dupe([]const u8, new_argv.items[0..]);
 }
 
-pub fn collectArgs(comptime root_command: args.Command, allocator: std.mem.Allocator) !ArgWithData {
+pub fn collectArgs(comptime root_command: args.Command, test_argv: ?[][]const u8, allocator: std.mem.Allocator) !ArgWithData {
     try root_command.printHelp();
-    const argv = try getArgv(allocator);
+    const argv = if (test_argv) |ta| ta else try getArgv(allocator);
 
     var app_data: ArgWithData = .{
         .name = root_command.name,
